@@ -19,7 +19,7 @@ import java.io.{File, FileInputStream, FileReader, FileWriter}
 import java.util.Collections
 import scala.collection.JavaConverters.*
 
-object ConvertMd extends App {
+object ConvertMd {
 
 
   import org.commonmark.node.*;
@@ -205,7 +205,7 @@ object ConvertMd extends App {
       ).asJava))
 
     val headings = getHeadings(slide)
-    assert(headings.size <= 1, "only one heading per slide supported")
+    assert(headings.size <= 1, s"only one heading per slide supported ${headings.map(getSlideTitle)}")
     headings.foreach(heading => {
       requests :+= new Request().setInsertText(new InsertTextRequest().setObjectId(slideId + "_title").setText(getSlideTitle(heading)))
     })
@@ -333,9 +333,12 @@ object ConvertMd extends App {
   }
 
 
-  def addImage(url: String, altText: String): TextContent =
+  def addImage(url: String, altText: String): TextContent = {
+    System.out.println(url)
+    def imgId(slideId: String): String = "s"+slideId + "img_" + url.takeRight(15).replace(".", "_").replace("/", "_")
+  
     TextContent("").addFormatting(c => List(new Request().setCreateImage(new CreateImageRequest()
-      .setObjectId(c.slideId + "_img_" + url.replace(".", "_"))
+      .setObjectId(imgId(c.slideId))
       .setUrl(url)
       .setElementProperties(new PageElementProperties()
         .setPageObjectId(c.slideId)
@@ -344,9 +347,10 @@ object ConvertMd extends App {
       )
     ),
       new Request().setUpdatePageElementAltText(new UpdatePageElementAltTextRequest()
-        .setObjectId(c.slideId + "_img_" + url.replace(".", "_"))
+        .setObjectId(imgId(c.slideId))
         .setDescription(altText).setTitle(altText)
       )))
+  }
 
   /**
    * top-level call on slide content, do not call recursively
@@ -431,7 +435,7 @@ object ConvertMd extends App {
       case l: Link =>
         concat(getChildren(l).map(convertInlineText))
           .setStyle(new TextStyle().setLink(new model.Link().setUrl(l.getDestination)), "link")
-      case i: Image => assert(false, "inline image not supported")
+      case i: Image => assert(false, s"inline image not supported ${i}")
       case c: Code => TextContent(c.getLiteral).makeCode()
     }
 

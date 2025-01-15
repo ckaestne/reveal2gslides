@@ -13,7 +13,7 @@ object Main extends App {
   getSlide(documentId)
 
 
-  val slides = readSlides("/home/ckaestne/Dropbox/work/mlip/lectures/01_introduction/intro.md")
+  val slides = readSlides("/home/ckaestne/Dropbox/work/mlip-s24/lectures/01_introduction/intro.md")
 
   val slideUpdates = for ((slide, idx) <- slides.drop(2).zipWithIndex) yield {
     convertSlide(slide, s"24_teams_$idx")
@@ -24,9 +24,9 @@ object Main extends App {
 //    println(idx+": "+e.toPrettyString)
 //  })
 
-//  deleteSlides(documentId,getSlideIds(documentId))
-//  writeSlides(documentId, slideUpdates.map(_._1).flatten, slideUpdates.map(_._2).flatten)
+ deleteSlides(documentId,getSlideIds(documentId))
+ writeSlides(documentId, slideUpdates.map(_._1).flatten, slideUpdates.map(_._2).flatten)
 
-  createSlide("01_introduction")
+  // createSlide("01_introduction")
 
 }
