@@ -11,6 +11,7 @@ import com.google.api.client.util.DateTime
 import com.google.auth.Credentials
 import com.google.auth.http.HttpCredentialsAdapter
 import com.google.auth.oauth2.ServiceAccountCredentials
+import com.google.api.services.drive.{Drive, DriveScopes}
 
 import scala.collection.immutable.List
 import com.google.api.services.slides.v1.model.*
@@ -29,7 +30,7 @@ object GoogleSlidesAPI {
 
   lazy val serviceAccountCredentials = ServiceAccountCredentials.fromStream(new FileInputStream(CREDENTIALS_FILE_PATH))
 
-  lazy val credentials: Credentials = serviceAccountCredentials.createScoped(Collections.singletonList(SlidesScopes.PRESENTATIONS))
+  lazy val credentials: Credentials = serviceAccountCredentials.createScoped(List(SlidesScopes.PRESENTATIONS, DriveScopes.DRIVE).asJava)
 
 
   // Create a Google Slides service object
@@ -37,6 +38,11 @@ object GoogleSlidesAPI {
     com.google.api.client.googleapis.javanet.GoogleNetHttpTransport.newTrustedTransport(),
     JSON_FACTORY, new HttpCredentialsAdapter(credentials)
   ).setApplicationName("Google Slides Scala Example").build()
+
+  lazy val driveService = new Drive.Builder(
+    com.google.api.client.googleapis.javanet.GoogleNetHttpTransport.newTrustedTransport(),
+    JSON_FACTORY, new HttpCredentialsAdapter(credentials)
+  ).setApplicationName("Drive API Scala Example").build()
 
 
   def getSlide(docId: String) =
@@ -96,6 +102,8 @@ object GoogleSlidesAPI {
   //  //  slideRequestBody.setPageElements(List(slideElement).asJava)
   //
   def writeSlides(documentId: String, slides: Seq[Request], updates: Seq[Presentation => Seq[Request]] = Nil): Unit = {
+    
+    
     val batchUpdateResponse = slidesService.presentations().batchUpdate(documentId, new BatchUpdatePresentationRequest().setRequests(slides.asJava)).execute()
 
     // Get the slide ID of the newly created slide
@@ -111,13 +119,33 @@ object GoogleSlidesAPI {
     }
   }
 
-  def createSlide(lectureId: String): Unit = {
+  import com.google.api.services.drive.model.Permission
+
+  def createSlide(driveFolder: String, lectureId: String): String = {
 
     val theme: Presentation = JSON_FACTORY.createJsonParser(new FileReader("theme.json")).parseAndClose(classOf[Presentation])
-    val presentation = new Presentation()./*setPresentationId("mlip" + lectureId).*/setMasters(theme.getMasters)
+    val presentation = new Presentation().setTitle(lectureId)./*setPresentationId("mlip" + lectureId).*/setMasters(theme.getMasters)
     val batchUpdateResponse = slidesService.presentations().create(presentation).execute()
-    println(batchUpdateResponse)
-//    batchUpdateResponse.getReplies.asScala.foreach(println)
+    val slideId = batchUpdateResponse.getPresentationId()
+    println("https://docs.google.com/presentation/d/"+slideId)
+    //set permissions
+    driveService.permissions().create(slideId,
+      new Permission().setRole("writer").setType("user").setEmailAddress("christian.kaestner@gmail.com")).execute()
+
+    //move to folder
+    val fileMetadata = driveService.files().get(slideId).setFields("parents").execute()
+    val previousParents = fileMetadata.getParents
+
+    // Update the file's parents to the new folder
+    driveService.files().update(slideId, null)
+      .setAddParents(driveFolder)
+      .setRemoveParents(previousParents.asScala.mkString(","))
+      .setFields("id, parents")
+      .execute()
+
+    println(s"File $slideId has been moved to folder $driveFolder")
+
+    return slideId
 
 
   }

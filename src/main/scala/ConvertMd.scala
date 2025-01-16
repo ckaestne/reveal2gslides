@@ -1,3 +1,4 @@
+import URLStatusChecker.isURLReachable
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.slides.v1.{Slides, SlidesScopes, model}
 import com.google.auth.Credentials
@@ -16,10 +17,11 @@ import scala.collection.immutable.List
 import com.google.api.services.slides.v1.model.*
 
 import java.io.{File, FileInputStream, FileReader, FileWriter}
+import java.net.{HttpURLConnection, URL}
 import java.util.Collections
 import scala.collection.JavaConverters.*
 
-object ConvertMd {
+class ConvertMd(val slideDeckId: String, imagePath: String) {
 
 
   import org.commonmark.node.*;
@@ -31,6 +33,8 @@ object ConvertMd {
   def readSlides(filepath: String): List[Slide] = {
 
     val parser = Parser.builder().build();
+    var source: String = scala.io.Source.fromFile(filepath).getLines().mkString("\n")
+    source = source.replace("\n---", "\n\n---").replace("---\n", "---\n\n")
     val document = parser.parseReader(new FileReader(filepath))
 
     var node = document.getFirstChild
@@ -145,7 +149,8 @@ object ConvertMd {
     case _ => false
   }
 
-  def convertSlide(slide: Slide, slideId: String): (Seq[Request], Seq[Presentation => Seq[Request]]) = {
+  def convertSlide(slide: Slide, slideIdx: Int): (Seq[Request], Seq[Presentation => Seq[Request]]) = {
+    val slideId = slideDeckId + "_" + slideIdx
     val notesNodeIdx = slide.indexWhere(n => n.isInstanceOf[Text] && n.asInstanceOf[Text].getLiteral.startsWith("Note:"))
     val (main, notes) = slide.splitAt(if (notesNodeIdx < 0) Int.MaxValue else notesNodeIdx)
 
@@ -335,6 +340,13 @@ object ConvertMd {
 
   def addImage(url: String, altText: String): TextContent = {
     System.out.println(url)
+    // ensure the image exists
+    val imgExists = isURLReachable(url)
+    if (!imgExists) {
+      System.err.println(s"image not reachable: $url")
+      return TextContent("[MISSING IMAGE: " + url + "]").makeTodo()
+    }
+
     def imgId(slideId: String): String = "s"+slideId + "img_" + url.takeRight(15).replace(".", "_").replace("/", "_")
   
     TextContent("").addFormatting(c => List(new Request().setCreateImage(new CreateImageRequest()
@@ -360,24 +372,12 @@ object ConvertMd {
     val c = content.map {
       case p: Paragraph if p.getFirstChild != null && p.getFirstChild.isInstanceOf[Image] =>
         val image = p.getFirstChild.asInstanceOf[Image]
-        val altText = if (image.getFirstChild != null && image.getFirstChild.isInstanceOf[Text])
-          image.getFirstChild.asInstanceOf[Text].getLiteral else ""
-
-        val url = image.getDestination
-        var img = TextContent(s"[Image: ${url} \"$altText\"]\n").makeTodo()
-
-        val imgURL = if (Set(".png", ".jpeg", ".jpg", ".gif").exists(url.endsWith)) Some(url)
-        else if (url endsWith ".webp") Some(url.dropRight(5) + ".png")
-        else if (url endsWith ".svg") Some(url.dropRight(4) + ".png")
-        else {
-          System.err.println(url)
-          None
-        }
-        imgURL foreach { url =>
-          img = img concat addImage("https://www.cs.cmu.edu/~ckaestne/fig/01_introduction/" + url, altText)
-        }
-
-        img
+        convertImage(image, None)
+      case p: Paragraph if p.getFirstChild != null && p.getFirstChild.isInstanceOf[Link] &&
+        p.getFirstChild.getFirstChild!=null && p.getFirstChild.getFirstChild.isInstanceOf[Image]=>
+        val link = p.getFirstChild.asInstanceOf[Link]
+        val image = link.getFirstChild.asInstanceOf[Image]
+        convertImage(image, Some(link.getDestination))
       case p: Paragraph => convertParagraph(p)
       case bullets: BulletList =>
         convertBulletList(bullets, 0).makeItemize()
@@ -391,9 +391,9 @@ object ConvertMd {
         TextContent("") //ignore
       case html: HtmlBlock if Set("<div class=\"small", "</div", "<!-- .element").exists(html.getLiteral startsWith _) => TextContent("") //ignore divs
       case html: HtmlBlock if html.getLiteral startsWith "<svg" => TextContent("[[SVG not converted, sorry.]]").makeTodo() //ignore divs
-      case html: HtmlBlock if html.getLiteral startsWith "<!--" => System.err.println("Ignoring comment: " + html.getLiteral); TextContent("") //ignore divs
+      case html: HtmlBlock if html.getLiteral startsWith "<!--" => System.err.println("Ignoring comment: " + html.getLiteral); TextContent(html.getLiteral).makeTodo() //ignore divs
       case html: HtmlBlock if html.getLiteral startsWith "<div class=\"tweet\"" => TextContent(s"[[Embedded tweet: ${html.getLiteral.drop(18).dropWhile(_!='"').dropRight(8)}]]").makeTodo() //ignore divs
-      case html: HtmlBlock => System.err.println("Unsupported html: "+html.getLiteral); TextContent("")
+      case html: HtmlBlock => System.err.println("Unsupported html: "+html.getLiteral); TextContent("Unsupported html: "+html.getLiteral).makeTodo()
       case b: BlockQuote => concat(getChildren(b).map(c => convertParagraph(c.asInstanceOf[Paragraph]))).makeItalics().makeIndent()
       case c: FencedCodeBlock =>
         val b = TextContent(c.getLiteral).makeCode()
@@ -402,6 +402,28 @@ object ConvertMd {
       //      case allOthers => convertInlineText(allOthers, 0)
     }
     concat(c)
+  }
+
+  private def convertImage(image: Image, link: Option[String]) = {
+    val altText = if (image.getFirstChild != null && image.getFirstChild.isInstanceOf[Text])
+      image.getFirstChild.asInstanceOf[Text].getLiteral else ""
+
+    val url = image.getDestination
+    val withLink = link.map(" with link to " + _).getOrElse("")
+    var img = TextContent(s"[Image: ${url} \"$altText\"$withLink]\n").makeTodo()
+
+    val imgURL = if (Set(".png", ".jpeg", ".jpg", ".gif").exists(url.endsWith)) Some(url)
+    else if (url endsWith ".webp") Some(url.dropRight(5) + ".png")
+    else if (url endsWith ".svg") Some(url.dropRight(4) + ".png")
+    else {
+      System.err.println(url)
+      None
+    }
+    imgURL foreach { url =>
+      img = img concat addImage(imagePath + url, altText)
+    }
+
+    img
   }
 
   private def convertParagraph(node: Paragraph /*Paragraph, Emphasis, Text, ...*/): TextContent =
@@ -416,7 +438,7 @@ object ConvertMd {
       //        }
       //        concat(items.map(i => convertParagraph(i, nesting + 1)))
       case s: SoftLineBreak => TextContent(" ")
-      case i: Image => ???
+      case i: Image => convertImage(i, None)
       case child => convertInlineText(child)
     }) :+ "\n"
 
@@ -437,6 +459,8 @@ object ConvertMd {
           .setStyle(new TextStyle().setLink(new model.Link().setUrl(l.getDestination)), "link")
       case i: Image => assert(false, s"inline image not supported ${i}")
       case c: Code => TextContent(c.getLiteral).makeCode()
+      case s: SoftLineBreak => TextContent(" ")
+      case html : HtmlInline => TextContent(html.getLiteral).makeTodo()
     }
 
 
@@ -486,7 +510,7 @@ object ConvertMd {
   }
 
 
-  def createNote(slideId: String, content: ConvertMd.TextContent): Presentation => Seq[Request] = (p: Presentation) => if (content.text.isEmpty) Nil else {
+  def createNote(slideId: String, content: TextContent): Presentation => Seq[Request] = (p: Presentation) => if (content.text.isEmpty) Nil else {
     val slide = p.getSlides.asScala.toList.find(_.getObjectId == slideId)
     assert(slide.isDefined, s"slide $slideId not found")
     assert(slide.get.getSlideProperties != null, s"slide $slideId has no properties")
@@ -500,5 +524,27 @@ object ConvertMd {
 
 
   def filterHeadings(slide: Slide): Slide = slide.filterNot(_.isInstanceOf[Heading])
+
+}
+
+
+
+object URLStatusChecker {
+
+  import scala.util.Try
+
+  def isURLReachable(urlString: String): Boolean = {
+    Try {
+      val connection = new URL(urlString).openConnection().asInstanceOf[HttpURLConnection]
+      try {
+        connection.setRequestMethod("HEAD")
+        connection.setConnectTimeout(1000) // 5 seconds
+        connection.setReadTimeout(1000)   // 5 seconds
+        connection.getResponseCode == HttpURLConnection.HTTP_OK
+      } finally {
+        connection.disconnect()
+      }
+    }.getOrElse(false)
+  }
 
 }
