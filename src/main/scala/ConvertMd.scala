@@ -15,6 +15,7 @@ import com.google.auth.oauth2.ServiceAccountCredentials
 
 import scala.collection.immutable.List
 import com.google.api.services.slides.v1.model.*
+import org.commonmark.parser.IncludeSourceSpans
 
 import java.io.{File, FileInputStream, FileReader, FileWriter}
 import java.net.{HttpURLConnection, URL}
@@ -32,7 +33,7 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
 
   def readSlides(filepath: String): List[Slide] = {
 
-    val parser = Parser.builder().build();
+    val parser = Parser.builder().includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES).build();
     var source: String = scala.io.Source.fromFile(filepath).getLines().mkString("\n")
     source = source.replace("\n---", "\n\n---").replace("---\n", "---\n\n")
     val document = parser.parseReader(new FileReader(filepath))
@@ -102,12 +103,12 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
       .setForegroundColor(new OptionalColor().setOpaqueColor(new OpaqueColor().setRgbColor(new RgbColor().setRed(1.0f))))
       , "bold,foregroundColor")
 
-    def makeItemize(): TextContent = addFormatting(c => List(new Request().setCreateParagraphBullets(new CreateParagraphBulletsRequest()
+    def makeItemize(): TextContent = if (text.isEmpty) this else addFormatting(c => List(new Request().setCreateParagraphBullets(new CreateParagraphBulletsRequest()
       .setObjectId(c.objectId)
       .setTextRange(new Range().setStartIndex(c.offset).setEndIndex(c.offset + text.length).setType("FIXED_RANGE")))
     ))
 
-    def makeEnumerate(): TextContent = addFormatting(c => List(new Request().setCreateParagraphBullets(new CreateParagraphBulletsRequest()
+    def makeEnumerate(): TextContent = if (text.isEmpty) this else addFormatting(c => List(new Request().setCreateParagraphBullets(new CreateParagraphBulletsRequest()
       .setObjectId(c.objectId)
       .setTextRange(new Range().setStartIndex(c.offset).setEndIndex(c.offset + text.length).setType("FIXED_RANGE"))
       .setBulletPreset("NUMBERED_DIGIT_ALPHA_ROMAN"))
@@ -123,8 +124,13 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
     def addFormatting(f: TextContentContext => List[Request]): TextContent = TextContent(text, c => formatting(c) ++ f(c))
 
     def genTextAndFormattingRequests(context: TextContentContext): List[Request] = if (text.isEmpty) Nil else
-      new Request().setInsertText(new InsertTextRequest().setText(text).setObjectId(context.objectId)) +: formatting(context)
+      new Request().setInsertText(new InsertTextRequest().setText(text).setObjectId(context.objectId)) +: sortFormatting(formatting(context))
 
+    def sortFormatting(formatting: List[Request]): List[Request] = formatting.sortBy {
+      case r: Request if r.getUpdateTextStyle != null => 1
+      case r: Request if r.getCreateParagraphBullets != null => Int.MaxValue - r.getCreateParagraphBullets.getTextRange.getStartIndex()
+      case _ => 0
+    }
     //    override def toString: String = ???
   }
 
@@ -138,7 +144,7 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
   def checkNoContentBeforeHeading(s: Slide): Unit = {
     val contentBeforeHeading = s.takeWhile(!_.isInstanceOf[Heading]).filterNot(_.isInstanceOf[HtmlBlock])
     val firstHeading = s.find(_.isInstanceOf[Heading])
-    assert(firstHeading.isEmpty || contentBeforeHeading.isEmpty, s"content before heading not supported $firstHeading")
+    assert(firstHeading.isEmpty || contentBeforeHeading.isEmpty, s"content before heading not supported $firstHeading "+s.head.getSourceSpans() )
   }
 
   def filterLayoutInstructions(s: Slide): Slide = s.filterNot {
@@ -158,13 +164,13 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
     val (main2, references) = main.splitAt(if (referencesNodeIdx < 0) Int.MaxValue else referencesNodeIdx)
 
     val colStartIdx = main2.indexWhere(matchHtmlComment("colstart"))
-    assert(main2.count(matchHtmlComment("col")) <= 1, "at most 2 columns per slide supported")
+    assert(main2.count(matchHtmlComment("col")) <= 1, "at most 2 columns per slide supported "+slide.head.getSourceSpans())
     val colIdx = main2.indexWhere(matchHtmlComment("col"))
     val colEndIdx = main2.indexWhere(matchHtmlComment("colend"))
     val contentBeforeColStart = main2.take(colStartIdx).filterNot(_.isInstanceOf[HtmlBlock]).nonEmpty
     val onlyHeaderBeforeColStart = main2.take(colStartIdx).filterNot(_.isInstanceOf[HtmlBlock]).filterNot(_.isInstanceOf[Heading]).isEmpty
     val contentAfterColEnd = main2.drop(colEndIdx).filterNot(_.isInstanceOf[HtmlBlock]).nonEmpty
-    assert(colStartIdx <= colIdx && colIdx <= colEndIdx, "colstart, col, colend must be in order")
+    assert(colStartIdx <0 || (colStartIdx <= colIdx && colIdx <= colEndIdx), s"colstart $colStartIdx, col $colIdx, colend $colEndIdx must be in order on slide $slideIdx "+slide.head.getSourceSpans())
 
 
     //heading and slide body (other than speaker notes and references)
@@ -210,10 +216,8 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
       ).asJava))
 
     val headings = getHeadings(slide)
-    assert(headings.size <= 1, s"only one heading per slide supported ${headings.map(getSlideTitle)}")
-    headings.foreach(heading => {
-      requests :+= new Request().setInsertText(new InsertTextRequest().setObjectId(slideId + "_title").setText(getSlideTitle(heading)))
-    })
+    if (headings.size > 1) System.err.println(s"warning: multiple headings on slide will be concatenated: ${headings.map(getSlideTitle)}")
+    requests :+= new Request().setInsertText(new InsertTextRequest().setObjectId(slideId + "_title").setText(headings.map(getSlideTitle).mkString("\n")))
 
     requests ++= convertContent(filterHeadings(slide)).genTextAndFormattingRequests(TextContentContext(0, slideId, slideId + "_body"))
 
@@ -237,10 +241,8 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
       ).asJava))
 
     val headings = getHeadings(heading)
-    assert(headings.size <= 1, "only one heading per slide supported")
-    headings.foreach(heading => {
-      requests :+= new Request().setInsertText(new InsertTextRequest().setObjectId(slideId + "_title").setText(getSlideTitle(heading)))
-    })
+    if (headings.size > 1) System.err.println(s"warning: multiple headings on slide will be concatenated: ${headings.map(getSlideTitle)}")
+    requests :+= new Request().setInsertText(new InsertTextRequest().setObjectId(slideId + "_title").setText(headings.map(getSlideTitle).mkString("\n")))
 
     requests ++= convertContent(left, true).genTextAndFormattingRequests(TextContentContext(0, slideId, slideId + "_left"))
     requests ++= convertContent(right, true).genTextAndFormattingRequests(TextContentContext(0, slideId, slideId + "_right"))
@@ -299,10 +301,8 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
       )
 
     val headings = getHeadings(top)
-    assert(headings.size <= 1, "only one heading per slide supported")
-    headings.foreach(heading => {
-      requests :+= new Request().setInsertText(new InsertTextRequest().setObjectId(titleId).setText(getSlideTitle(heading)))
-    })
+    if (headings.size > 1) System.err.println(s"warning: multiple headings on slide will be concatenated: ${headings.map(getSlideTitle)}")
+    requests :+= new Request().setInsertText(new InsertTextRequest().setObjectId(titleId).setText(headings.map(getSlideTitle).mkString("\n")))
 
     requests ++= convertContent(filterHeadings(top), false).genTextAndFormattingRequests(TextContentContext(0, slideId, topId))
     requests ++= convertContent(left, true).genTextAndFormattingRequests(TextContentContext(0, slideId, leftId))
@@ -320,6 +320,7 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
         case p: Paragraph => "\t" * nesting +: convertParagraph(p)
         case b: BulletList => convertBulletList(b, nesting + 1)
         case o: OrderedList => convertOrderedList(o, nesting + 1)
+        case o => System.err.println("unsupported bullet list item "+o.getSourceSpans()); ???
       }
       case _ => ???
     })
@@ -338,7 +339,9 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
   }
 
 
-  def addImage(url: String, altText: String): TextContent = {
+  def addImage(_url: String, altText: String): TextContent = {
+    val url = if (_url endsWith "../_assets/overview.png")
+      "https://www.cs.cmu.edu/~ckaestne/fig/01_introduction/overview.png" else _url
     System.out.println(url)
     // ensure the image exists
     val imgExists = isURLReachable(url)
@@ -394,14 +397,21 @@ class ConvertMd(val slideDeckId: String, imagePath: String) {
       case html: HtmlBlock if html.getLiteral startsWith "<!--" => System.err.println("Ignoring comment: " + html.getLiteral); TextContent(html.getLiteral).makeTodo() //ignore divs
       case html: HtmlBlock if html.getLiteral startsWith "<div class=\"tweet\"" => TextContent(s"[[Embedded tweet: ${html.getLiteral.drop(18).dropWhile(_!='"').dropRight(8)}]]").makeTodo() //ignore divs
       case html: HtmlBlock => System.err.println("Unsupported html: "+html.getLiteral); TextContent("Unsupported html: "+html.getLiteral).makeTodo()
-      case b: BlockQuote => concat(getChildren(b).map(c => convertParagraph(c.asInstanceOf[Paragraph]))).makeItalics().makeIndent()
+      case b: BlockQuote => concat(getChildren(b).map(c => convertQuoteContent(c))).makeItalics().makeIndent()
       case c: FencedCodeBlock =>
         val b = TextContent(c.getLiteral).makeCode()
         if (c.getInfo != null) s"[${c.getInfo}]" +: b
         else b
-      //      case allOthers => convertInlineText(allOthers, 0)
+      case allOthers => throw new IllegalArgumentException("unsupported node: " + allOthers + " at " + allOthers.getSourceSpans())
     }
     concat(c)
+  }
+
+  def convertQuoteContent(n: Node): TextContent = n match {
+    case p: Paragraph => convertParagraph(p)
+    case b: BulletList => convertBulletList(b, 0).makeItemize()
+    case o: OrderedList => convertOrderedList(o, 0).makeEnumerate()
+    case _ => ???
   }
 
   private def convertImage(image: Image, link: Option[String]) = {

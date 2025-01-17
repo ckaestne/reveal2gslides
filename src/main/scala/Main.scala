@@ -5,7 +5,6 @@ import java.io.FileWriter
 
 object Main extends App {
 
-  //  val documentId = "1tEX_7XNpHUAFr7M-jJJJod1BUO2g6qFiagioclBWwXU" // ID of the Google Slide presentation you want to access
   val driveFolder = "1vv0TfPlfe8-bAv5DehNbxBxlR2bmWKeX"
 
   val lectures =
@@ -34,10 +33,11 @@ object Main extends App {
       |./22_security/security.md
       |./23_safety/safety.md
       |./24_summary/all.md
+      |./24_teams/teams.md
       |""".stripMargin.split("\n").filter(_.nonEmpty).map(_.drop(2))
 
 
-  for (lecture <- lectures.drop(3).take(1)) {
+  for (lecture <- lectures.drop(24).take(8)) {
     val lectureId = lecture.split("/").head
     System.out.println("### " + lectureId)
 
@@ -63,35 +63,35 @@ object Main extends App {
   }
 
 
-  //  import GoogleSlidesAPI._
-  //
-  //
-  ////  saveSlide(documentId)
-  //
-  ////  getSlide(documentId)
-  //
-  //  val converter = new ConvertMd("01_introduction", "https://www.cs.cmu.edu/~ckaestne/fig/01_introduction/")
-  //
-  //  val slides = converter.readSlides("/home/ckaestne/Dropbox/work/mlip/lectures/01_introduction/intro.md")
-  //
-  //  val slideUpdates = for ((slide, idx) <- slides.drop(2).zipWithIndex)
-  //    yield converter.convertSlide(slide, idx)
-  //
-  ////  val updateCommands = new StringBuffer()
-  ////  slideUpdates.flatMap(_._1).zipWithIndex.foreach((e,idx)=> {
-  ////    e.setFactory(GsonFactory.getDefaultInstance)
-  ////    updateCommands.append(idx).append(": ").append(e.toPrettyString)
-  ////  })
-  ////  // write updateCommands to a file
-  ////  val f = new FileWriter(s"updateCommands_${converter.slideDeckId}.tmp")
-  ////  f.write(updateCommands.toString)
-  ////  f.close()
-  //
-  // deleteSlides(documentId,getSlideIds(documentId))
-  // writeSlides(documentId, slideUpdates.map(_._1).flatten, slideUpdates.map(_._2).flatten)
-  // System.out.println(s"Slides ${converter.slideDeckId} published to https://docs.google.com/presentation/d/$documentId")
-  //
-  //
-  //   createSlide(driveFolder, "01_introduction")
+//    import GoogleSlidesAPI._
+//      val documentId = "1tEX_7XNpHUAFr7M-jJJJod1BUO2g6qFiagioclBWwXU" // ID of the Google Slide presentation you want to access
+//
+//  ////  saveSlide(documentId)
+//  //
+//  ////  getSlide(documentId)
+//  //
+//    val converter = new ConvertMd("05_modelaccuracy", "https://www.cs.cmu.edu/~ckaestne/fig/05_modelaccuracy/")
+//
+//    val slides = converter.readSlides("/home/ckaestne/Dropbox/work/mlip/lectures/05_modelaccuracy/modelquality1.md")
+//
+//    val slideUpdates = for ((slide, idx) <- slides.drop(21).take(1).zipWithIndex)
+//      yield converter.convertSlide(slide, idx)
+//
+//    val updateCommands = new StringBuffer()
+//    slideUpdates.flatMap(_._1).zipWithIndex.foreach((e,idx)=> {
+//      e.setFactory(GsonFactory.getDefaultInstance)
+//      updateCommands.append(idx).append(": ").append(e.toPrettyString)
+//    })
+//    // write updateCommands to a file
+//    val f = new FileWriter(s"updateCommands.tmp")
+//    f.write(updateCommands.toString)
+//    f.close()
+//  //
+//   deleteSlides(documentId,getSlideIds(documentId))
+//   writeSlides(documentId, slideUpdates.map(_._1).flatten, slideUpdates.map(_._2).flatten)
+//   System.out.println(s"Slides ${converter.slideDeckId} published to https://docs.google.com/presentation/d/$documentId")
+//  //
+//  //
+//  //   createSlide(driveFolder, "01_introduction")
 
 }
